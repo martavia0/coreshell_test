@@ -18,11 +18,14 @@ from netCDF4 import Dataset as ncd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import pandas as pd
 
 # --- Files (resolved relative to this script so it runs from anywhere)
 HERE = os.path.dirname(os.path.abspath(__file__))
 F_MODEL = os.path.join(HERE, 'coreshell_test.nc')
 F_OBS   = os.path.join(HERE, 'observed_physical_variables7.nc')
+F_TXT   = os.path.join(HERE, 'Colocated_PM1_BCN.txt')
 
 # --- Load model
 mod = ncd(F_MODEL, 'r')
@@ -49,6 +52,17 @@ if os.path.exists(F_OBS):
     assert cobs.shape[0] == N, 'observation count differs from model'
 else:
     print('NOTE: %s not found -> model-vs-obs section skipped' % F_OBS)
+
+# --- Load Datetime (sample axis, from the colocated measurements file)
+times = None
+if os.path.exists(F_TXT):
+    times = pd.to_datetime(
+        pd.read_csv(F_TXT, sep='\t', usecols=['Datetime'])['Datetime'])
+    if len(times) != N:
+        print('NOTE: %s has %d rows (expected %d) -> index axis used'
+              % (os.path.basename(F_TXT), len(times), N))
+        times = None
+x_ax = times.to_numpy() if times is not None else np.arange(N)
 
 # =====================================================================
 # 1. Data summary
@@ -174,7 +188,7 @@ if cobs is not None:
     ax[0].plot(wls, cobs.mean(axis=0), 's--', color='k', label='observations (mean)')
 ax[0].set_yscale('log')
 ax[0].set_xlabel('Wavelength (nm)')
-ax[0].set_ylabel(r'$\sigma_{abs}$ (m$^{-1}$)')
+ax[0].set_ylabel(r'$B_{abs}$ (m$^{-1}$)')
 ax[0].set_title('Total absorption by wavelength')
 ax[0].legend()
 ax[0].grid(alpha=0.3)
@@ -182,13 +196,13 @@ ax[0].grid(alpha=0.3)
 bottom = np.zeros(L)
 parts = np.concatenate([mean_cs[None, :], mean_sp])    # (S+1, L)
 labels = ['core-shell'] + species
-colors = ['0.3', 'tab:orange', 'tab:green', 'tab:blue', 'tab:purple']
+colors = ['0.3', 'saddlebrown', 'red', 'blue', 'orange']    # core-shell, org, so4, no3, nh4
 for i in range(S + 1):
     ax[1].bar(wls, parts[i], bottom=bottom, color=colors[i], label=labels[i], width=28)
     bottom += parts[i]
 ax[1].set_yscale('log')
 ax[1].set_xlabel('Wavelength (nm)')
-ax[1].set_ylabel(r'mean $\sigma_{abs}$ (m$^{-1}$)')
+ax[1].set_ylabel(r'mean $B_{abs}$ (m$^{-1}$)')
 ax[1].set_title('Mixing-state and species contributions')
 ax[1].legend(fontsize=8)
 ax[1].grid(alpha=0.3, axis='y')
@@ -202,7 +216,7 @@ print('  saved %s' % p1)
 fig, ax = plt.subplots(figsize=(7.5, 4.2))
 ax.bar(rc, mcs_b,  width=0.7, color='0.3',        label='core-shell')
 ax.bar(rc, mext_b, width=0.7, bottom=mcs_b, color='tab:orange', label='externally mixed')
-ax.set_xscale('log'); ax.set_yscale('log')
+ax.set_xscale('log')
 ax.set_xlabel('Bin center radius (um)')
 ax.set_ylabel(r'mean $\sigma_{abs}$ per bin (m$^{-1}$)')
 ax.set_title('Size-bin profile (mean over samples and wavelengths)')
@@ -223,14 +237,14 @@ print('  saved %s' % p2)
 # --- Fig 3: model vs observations ---------------------------------------
 if cobs is not None:
     npan = L + 1
-    ncol = 2
-    fig, axes = plt.subplots(int(np.ceil(npan / ncol)), ncol,
-                             figsize=(4.2 * ncol, 3.8 * int(np.ceil(npan / ncol))))
+    ncol = 4
+    nrow = int(np.ceil(npan / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(3.4 * ncol, 3.1 * nrow))
     axes = np.atleast_1d(axes).ravel()
     for l in range(L):
         axp = axes[l]
         m, o = babs_tot[:, l], cobs[:, l]
-        axp.loglog(o, m, '.', ms=4, alpha=0.5)
+        axp.scatter(o, m, s=8, alpha=0.5)
         lo = o.max()
         axp.plot([o.min(), lo], [o.min(), lo], 'k-', lw=1, alpha=0.6)
         ok = o > 0
@@ -239,7 +253,7 @@ if cobs is not None:
         axp.set_title('%d nm   R$^2$=%.2f  MFB=%+.0f%%' % (wls[l], r2, mfb), fontsize=9)
         axp.set_xlabel('obs (m$^{-1}$)')
         axp.set_ylabel('model (m$^{-1}$)')
-        axp.grid(alpha=0.3, which='both')
+        axp.grid(alpha=0.3)
     axp = axes[L]
     fok = fa & np.isfinite(aae_obs)
     axp.scatter(aae_obs[fok], aae_model[fok], s=10, alpha=0.5)
@@ -260,15 +274,18 @@ if cobs is not None:
 fig, axes = plt.subplots(3, 1, figsize=(10, 7.5), sharex=True)
 ikeys = [int(np.argmin(np.abs(wls - w))) for w in (370, 520, 880)]
 for axp, l in zip(axes, ikeys):
-    axp.plot(np.arange(N), babs_tot[:, l], '-', color='tab:red', lw=0.8, label='model')
+    axp.plot(x_ax, babs_tot[:, l], '-', color='tab:red', lw=0.8, label='model')
     if cobs is not None:
-        axp.plot(np.arange(N), cobs[:, l], '.', color='k', ms=4, alpha=0.5, label='obs')
+        axp.plot(x_ax, cobs[:, l], '.', color='k', ms=4, alpha=0.5, label='obs')
     axp.set_yscale('log')
     axp.set_ylabel('%d nm (m$^{-1}$)' % wls[l])
     axp.legend(loc='upper right', fontsize=8)
     axp.grid(alpha=0.3, which='both')
-axes[-1].set_xlabel('Sample index')
+    if times is not None:
+        axp.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+axes[-1].set_xlabel('Datetime' if times is not None else 'Sample index')
 fig.suptitle('Total absorption: model vs observations', y=1.0)
+fig.autofmt_xdate()
 fig.tight_layout(rect=(0, 0, 1, 0.97))
 p4 = os.path.join(HERE, 'coreshell_test_timeseries.png')
 fig.savefig(p4, dpi=200)
