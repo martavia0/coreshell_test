@@ -1,0 +1,203 @@
+# -*- coding: utf-8 -*-
+
+import numpy as nmp
+from scipy.integrate import quad as qua
+from netCDF4 import Dataset as ncd
+import pandas as pd
+from centralized_input_data.centralized_input_data import *
+
+# --- Colocated PM1 Barcelona
+
+inp = nmp.loadtxt('Colocated_PM1_BCN.txt', skiprows=1, usecols=(2,3,4,5,6,7,8,9,10,11,12,13))
+
+df=pd.read_csv("Colocated_PM1_BCN.txt", sep='\t')
+dt=pd.to_datetime(df['Datetime'], yearfirst=True)
+F = inp.shape[0] #Datetime dimension
+cobs_370 = inp[:,0] # [F] (Mm-1), PM1 sizecut
+cobs_470 = inp[:,1]
+cobs_520 = inp[:,2]
+cobs_590 = inp[:,3] 
+cobs_660 = inp[:,4]
+cobs_880 = inp[:,5]
+cobs_950 = inp[:,6]
+
+cobs_370 = cobs_370*1e-06 # (m-1)
+cobs_470 = cobs_470*1e-06
+cobs_520 = cobs_520*1e-06
+cobs_590 = cobs_590*1e-06
+cobs_660 = cobs_660*1e-06
+cobs_880 = cobs_880*1e-06
+cobs_950 = cobs_950*1e-06
+
+cobs = nmp.array([[cobs_370[f], cobs_470[f], cobs_520[f], cobs_590[f], cobs_660[f], cobs_880[f], cobs_950[f]] for f in nmp.arange(F)]) # [F,L], L is the number of wl
+
+morg = inp[:,7] # [F] (ug m-3)
+msoo = inp[:,8] #soot, for EC
+mso4 = inp[:,9]
+mno3 = inp[:,10]
+mnh4 = inp[:,11]
+
+morg = morg*1e-06 # (g m-3)
+msoo = msoo*1e-06
+mso4 = mso4*1e-06
+mno3 = mno3*1e-06
+mnh4 = mnh4*1e-06
+
+# --- Campaign-weighted norm-MSD Barcelona
+
+inp = nmp.loadtxt('Campaign_weighted_sizedistrib_norm.txt', skiprows=1, usecols=(1,2,3,4,5))
+
+dias = inp[:,0] # [So] (nm)
+
+rads = (dias/2.0)*1e-03 # (um)
+dlog = nmp.log(rads)[1] - nmp.log(rads)[0] #we go to log space to get log-spaced bins which give us the geometric radii bin and not hte average of the bin range!!!
+obin = nmp.exp(nmp.log(rads) - dlog/2.0) #bin_left
+obax = nmp.exp(nmp.log(rads) + dlog/2.0) #bin_irght
+
+print( 'rads: ', rads )
+print( 'obin: ', obin )
+print( 'obax: ', obax )
+
+xorg = inp[:,1] # [So] (-)
+xso4 = inp[:,2]
+xno3 = inp[:,3]
+xnh4 = inp[:,4]
+
+# - Projection of bulk soot
+
+xsoo = nmp.zeros(So)
+
+RG = 0.1 #bulk[5][0] # bcl (um)
+SG = bulk[5][1]
+
+S0 = obin[0]
+S1 = obax[-1]
+
+norm = qua(LogMorm,S0,S1,args=(RG,SG))[0]
+
+for s in nmp.arange(So):
+
+ SA = obin[s]
+ SB = obax[s]
+
+ obym = qua(LogMorm,SA,SB,args=(RG,SG))[0]
+
+ xsoo[s] = obym/norm
+
+print( 'sum(xorg): ', nmp.sum(xorg) )
+print( 'sum(xsoo): ', nmp.sum(xsoo) )
+print( 'sum(xso4): ', nmp.sum(xso4) )
+print( 'sum(xno3): ', nmp.sum(xno3) )
+print( 'sum(xnh4): ', nmp.sum(xnh4) )
+#print( 'Distribution of org: ', xorg)
+#print( 'Distribution of so4: ', xso4)
+#print( 'Distribution of no3: ', xno3)
+#print( 'Distribution of nh4: ', xnh4)
+#print( 'Distribution of rsoot: ', xsoo)
+# --- Mass size distributions
+
+oorg, osoo, oso4, ono3, onh4 = nmp.zeros([F,So]), nmp.zeros([F,So]), nmp.zeros([F,So]), nmp.zeros([F,So]), nmp.zeros([F,So])
+
+for f in nmp.arange(F):
+
+ oorg[f,:] = morg[f]*xorg # [F,So] (g m-3)
+ osoo[f,:] = msoo[f]*xsoo
+ oso4[f,:] = mso4[f]*xso4
+ ono3[f,:] = mno3[f]*xno3
+ onh4[f,:] = mnh4[f]*xnh4
+
+# ASSUME DRY CONDITIONS #
+
+# --- Projection onto radiation bins
+
+rorg, rsoo, rso4, rno3, rnh4 = nmp.zeros([F,Sr]), nmp.zeros([F,Sr]), nmp.zeros([F,Sr]), nmp.zeros([F,Sr]), nmp.zeros([F,Sr])
+
+for r in nmp.arange(Sr):
+
+ RA = rbin[r]
+ RB = rbax[r]
+
+ rbyo = nmp.zeros(So)
+
+ for o in nmp.arange(So):
+
+  OA = obin[o]
+  OB = obax[o]
+
+  C1 = (OA < RA)*(RA < OB)*(OB <= RB)
+  F1 = nmp.log(OB/RA)/nmp.log(OB/OA)
+
+  C2 = (OA < RA)*(RB < OB)
+  F2 = nmp.log(RB/RA)/nmp.log(OB/OA)
+
+  C3 = (RA <= OA)*(OB <= RB)
+  F3 = 1.0
+
+  C4 = (RA <= OA)*(OA < RB)*(RB < OB)
+  F4 = nmp.log(RB/OA)/nmp.log(OB/OA)
+
+  if C1: rbyo[o] = F1
+  if C2: rbyo[o] = F2
+  if C3: rbyo[o] = F3
+  if C4: rbyo[o] = F4
+
+ rorg[:,r] = nmp.sum(oorg*rbyo, axis=1)
+ rsoo[:,r] = nmp.sum(osoo*rbyo, axis=1)
+ rso4[:,r] = nmp.sum(oso4*rbyo, axis=1)
+ rno3[:,r] = nmp.sum(ono3*rbyo, axis=1)
+ rnh4[:,r] = nmp.sum(onh4*rbyo, axis=1)
+
+print( 'Conservation of org: ', nmp.sum(oorg), nmp.sum(rorg) )
+print( 'Conservation of soo: ', nmp.sum(osoo), nmp.sum(rsoo) )
+print( 'Conservation of so4: ', nmp.sum(oso4), nmp.sum(rso4) )
+print( 'Conservation of no3: ', nmp.sum(ono3), nmp.sum(rno3) )
+print( 'Conservation of nh4: ', nmp.sum(onh4), nmp.sum(rnh4) )
+print('')
+print( 'Distribution of org: ', nmp.mean(rorg, axis=0))
+print( 'Distribution of so4: ', nmp.mean(rso4, axis=0))
+print( 'Distribution of no3: ', nmp.mean(rno3, axis=0))
+print( 'Distribution of nh4: ', nmp.mean(rnh4, axis=0))
+print( 'Distribution of rsoot: ', nmp.mean(rsoo, axis=0))
+print( 'Observed bins (um radius):  ', obin[0], '->', obax[-1])
+print( 'Radiation bins (um radius):  ', rbin[0], '->', rbax[-1])
+print( 'Radiation bins all: ', rbin)
+# --- Observed physical variables
+
+out = ncd('observed_physical_variables7_r100.nc', 'w', format='NETCDF4')
+out.createDimension('F', F)
+out.createDimension('L', L)
+out.createDimension('Sr', Sr)
+# --- --- ---
+COBS = out.createVariable('COBS', 'f4', ('F','L'))
+COBS.units = 'm-1'
+COBS.long_name = 'Single-wavelength absorption coefficient'
+# --- --- ---
+RORG = out.createVariable('RORG', 'f4', ('F','Sr'))
+RORG.units = 'g m-3'
+RORG.long_name = 'Size-distributed mass concentration: Organics'
+# --- --- ---
+RSOO = out.createVariable('RSOO', 'f4', ('F','Sr'))
+RSOO.units = 'g m-3'
+RSOO.long_name = 'Size-distributed mass concentration: Soot'
+# --- --- ---
+RSO4 = out.createVariable('RSO4', 'f4', ('F','Sr'))
+RSO4.units = 'g m-3'
+RSO4.long_name = 'Size-distributed mass concentration: Sulfate'
+# --- --- ---
+RNO3 = out.createVariable('RNO3', 'f4', ('F','Sr'))
+RNO3.units = 'g m-3'
+RNO3.long_name = 'Size-distributed mass concentration: Nitrate'
+# --- --- ---
+RNH4 = out.createVariable('RNH4', 'f4', ('F','Sr'))
+RNH4.units = 'g m-3'
+RNH4.long_name = 'Size-distributed mass concentration: Ammonium'
+# --- --- ---- 
+COBS[:,:] = cobs
+RORG[:,:] = rorg
+RSOO[:,:] = rsoo
+RSO4[:,:] = rso4
+RNO3[:,:] = rno3
+RNH4[:,:] = rnh4
+out.close()
+
+# --- End of script
